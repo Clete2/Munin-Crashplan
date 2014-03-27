@@ -1,0 +1,121 @@
+#!/usr/bin/perl
+=head1 NAME
+crashplan - Munin plugin to display the state of recent incoming backups.
+NOTE: This has not been tested for outgoing backups.
+
+=head1 CONFIGURATION
+ln -s /usr/libexec/munin/plugins/crashplan /etc/munin/plugins/crashplan
+
+Change the $crashplanLog variable below to point to your crashplan log.
+=cut
+
+$crashplanLog = "/usr/local/crashplan/log/history.log.0";
+open FILE, $crashplanLog;
+
+# Inefficiency at its best.
+my %backupStatus;
+my %sizeRemaining;
+while(my $line = <FILE>){
+	if($line =~ /Starting\sbackup\sfrom\s(.*):.*\((.*)\)/i){
+		$key = $1;
+		$remaining = $2;
+		$key =~ s/\s//;
+		$backupStatus{$key} = 1;
+		$sizeRemaining{$key} = $remaining;
+	}elsif($line =~ /Stopped\sbackup\sfrom\s(.*)\sin/i){
+		$key = $1;
+		$key =~ s/\s//;
+		$backupStatus{$key} = 0;
+	}elsif($line =~ /Completed\sbackup\sfrom\s(.*)\sin/i){
+		$key = $1;
+		$key =~ s/\s//;
+		$backupStatus{$key} = 0;
+		$sizeRemaining{$key} = 0;
+	}elsif($line =~ /CrashPlan\sstarted/i){
+		foreach my $key (keys %backupStatus){
+			$backupStatus{$key} = 0;
+		}
+	}
+}
+
+if($ARGV[0] eq "config"){
+	print "multigraph crashplan_backup_status\n";
+	print "graph_title CrashPlan Backup Status\n";
+	print "graph_vlabel backing up\n";
+	print "graph_category backup\n";
+	print "graph_args -l 0 -u 1\n";
+	while(($key, $value) = each(%backupStatus)){
+		print "$key.label $key\n";
+	}
+	print "\n";
+
+	while(($key, $value) = each(%backupStatus)){
+		print "multigraph  crashplan_backup_status.$key\n";
+		print "graph_title CrashPlan Backup Status - $key\n";
+		print "graph_args -l 0 -u 1\n";
+		print "$key.label $key\n\n";
+	}
+	
+	print "multigraph crashplan_size_remaining\n";
+	print "graph_title CrashPlan Size Remaining\n";
+	print "graph_vlabel size remaining\n";
+	print "graph_category backup\n";
+	print "graph_args --base 1024\n";
+	while(($key, $value) = each(%sizeRemaining)){
+		print "$key.label $key\n";
+	}
+	print "\n";
+
+	while(($key, $value) = each(%sizeRemaining)){
+		print "multigraph  crashplan_size_remaining.$key\n";
+		print "graph_title CrashPlan Size Remaining - $key\n";
+		print "$key.label $key\n\n";
+	}
+
+	exit;
+}
+
+# Process the sizeRemaining hash
+while(($key, $value) = each(%sizeRemaining)){
+	$strippedValue = $value;
+	$strippedValue =~ s/\s//;
+	$strippedValue =~ s/[A-Za-z]//;
+	$strippedValue *= 1024;
+	if($value =~ /GB/i){
+		$sizeRemaining{$key} = ($strippedValue * 1024) * 1024;
+	}elsif($value =~ /MB/i){
+		$sizeRemaining{$key} = $strippedValue * 1024;
+	}else{
+		# Assuming KB
+		$sizeRemaining{$key} = $strippedValue;
+	}
+}
+
+# Overview graphs
+print "multigraph crashplan_backup_status\n";
+while(($key, $value) = each(%backupStatus)){
+	print "$key.value $value.00\n";
+}
+
+print "\nmultigraph crashplan_size_remaining\n";
+while(($key, $value) = each(%sizeRemaining)){
+	if($sizeRemaining{$key} == 0){
+		print "$key.value $value.00\n";
+	}else{
+		print "$key.value $value\n";
+	}
+}
+print "\n";
+
+# Deep graphs
+while(($key, $value) = each(%backupStatus)){
+	print "multigraph crashplan_backup_status.$key\n";
+	print "$key.value $value.00\n\n";
+
+	print "multigraph crashplan_size_remaining.$key\n";
+	if($sizeRemaining{$key} == 0){
+		print "$key.value $sizeRemaining{$key}.00\n\n";
+	}else{
+		print "$key.value $sizeRemaining{$key}\n\n";
+	}
+}
